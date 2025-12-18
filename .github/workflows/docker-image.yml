@@ -17,8 +17,9 @@ jobs:
     outputs:
       new_release: ${{ steps.check.outputs.new_release }}
       version: ${{ steps.check.outputs.version }}
+      pytorch_version: ${{ steps.check.outputs.pytorch_version }}
     steps:
-      - name: Check for new vLLM release
+      - name: Check for new vLLM release and get PyTorch version
         id: check
         run: |
           # Get latest vLLM release
@@ -31,6 +32,20 @@ jobs:
           
           echo "Latest vLLM version: $LATEST"
           
+          # Get PyTorch version from vLLM's pyproject.toml
+          PYTORCH_REQ=$(curl -s "https://raw.githubusercontent.com/vllm-project/vllm/${LATEST}/pyproject.toml" | \
+            grep -E "torch[>=<]" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          
+          if [ -z "$PYTORCH_REQ" ]; then
+            # Fallback: check requirements files
+            PYTORCH_REQ=$(curl -s "https://raw.githubusercontent.com/vllm-project/vllm/${LATEST}/requirements-common.txt" | \
+              grep -E "^torch" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          fi
+          
+          # Default to 2.9.0 if we can't determine
+          PYTORCH_VERSION=${PYTORCH_REQ:-2.9.0}
+          echo "PyTorch version for vLLM $LATEST: $PYTORCH_VERSION"
+          
           # Check if we already have this version
           EXISTS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -40,9 +55,10 @@ jobs:
             echo "Version $LATEST already exists, skipping build"
             echo "new_release=false" >> $GITHUB_OUTPUT
           else
-            echo "Building version $LATEST"
+            echo "Building version $LATEST with PyTorch $PYTORCH_VERSION"
             echo "new_release=true" >> $GITHUB_OUTPUT
             echo "version=$LATEST" >> $GITHUB_OUTPUT
+            echo "pytorch_version=$PYTORCH_VERSION" >> $GITHUB_OUTPUT
           fi
 
   build:
@@ -57,13 +73,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
-      - name: Update Dockerfile with new version
+      - name: Update Dockerfile with versions
         run: |
-          VERSION=${{ needs.check-release.outputs.version }}
-          # Remove 'v' prefix if present
-          VERSION_NUM=${VERSION#v}
-          sed -i "s/git checkout v0.12.0/git checkout ${VERSION}/" Dockerfile
-          echo "Building vLLM $VERSION"
+          VLLM_VERSION=${{ needs.check-release.outputs.version }}
+          PYTORCH_VERSION=${{ needs.check-release.outputs.pytorch_version }}
+          
+          # Update PyTorch version
+          sed -i "s/PYTORCH_BUILD_VERSION=2.9.0+sm70/PYTORCH_BUILD_VERSION=${PYTORCH_VERSION}+sm70/" Dockerfile
+          sed -i "s/git checkout v2.9.0/git checkout v${PYTORCH_VERSION}/" Dockerfile
+          
+          # Update vLLM version
+          sed -i "s/git checkout v0.12.0/git checkout ${VLLM_VERSION}/" Dockerfile
+          
+          echo "Building vLLM $VLLM_VERSION with PyTorch $PYTORCH_VERSION"
+          cat Dockerfile
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
