@@ -68,10 +68,22 @@ jobs:
     permissions:
       contents: read
       packages: write
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      
+      - name: Free up disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          docker system prune -af --volumes || true
+          echo "Disk space after cleanup:"
+          df -h
       
       - name: Update Dockerfile with versions
         run: |
@@ -80,9 +92,11 @@ jobs:
           
           # Update PyTorch version
           sed -i "s/PYTORCH_BUILD_VERSION=2.9.0+sm70/PYTORCH_BUILD_VERSION=${PYTORCH_VERSION}+sm70/" Dockerfile
+          sed -i "s/git fetch --depth 1 origin v2.9.0/git fetch --depth 1 origin v${PYTORCH_VERSION}/" Dockerfile
           sed -i "s/git checkout v2.9.0/git checkout v${PYTORCH_VERSION}/" Dockerfile
           
           # Update vLLM version
+          sed -i "s/git fetch --depth 1 origin v0.12.0/git fetch --depth 1 origin ${VLLM_VERSION}/" Dockerfile
           sed -i "s/git checkout v0.12.0/git checkout ${VLLM_VERSION}/" Dockerfile
           
           echo "Building vLLM $VLLM_VERSION with PyTorch $PYTORCH_VERSION"
@@ -108,3 +122,6 @@ jobs:
             ghcr.io/jajmangold/vllm-sm70:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+          platforms: linux/amd64

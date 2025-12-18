@@ -33,15 +33,16 @@ RUN apt update && apt install -y \
     && rm -rf /var/lib/apt/lists/*
 
 
-RUN python3 -m pip install --break-system-packages numpy wheel "setuptools>=70" pyyaml typing_extensions
+RUN python3 -m pip install --break-system-packages --no-cache-dir numpy wheel "setuptools>=70" pyyaml typing_extensions
 
 # ---- build PyTorch from source (sm_70 enabled) ----
 WORKDIR /opt
-RUN git clone --recursive https://github.com/pytorch/pytorch.git
-WORKDIR /opt/pytorch
-RUN git checkout v2.9.0 && \
+RUN git clone --depth 1 --recursive --shallow-submodules https://github.com/pytorch/pytorch.git && \
+    cd pytorch && \
+    git fetch --depth 1 origin v2.9.0 && \
+    git checkout v2.9.0 && \
     git submodule sync && \
-    git submodule update --init --recursive
+    git submodule update --init --recursive --depth 1
 
 # Disable stuff we don't need (saves hours)
 ENV USE_MKLDNN=0 \
@@ -52,17 +53,26 @@ ENV USE_MKLDNN=0 \
     USE_QNNPACK=0 \
     USE_ROCM=0
 
-RUN pip install --break-system-packages -e . -v --no-build-isolation
+WORKDIR /opt/pytorch
+RUN pip install --break-system-packages --no-cache-dir -e . -v --no-build-isolation && \
+    rm -rf /opt/pytorch/.git /opt/pytorch/build /root/.cache/pip && \
+    find /opt/pytorch -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 # ---- build vLLM v0.12.0 ----
 WORKDIR /opt
-RUN git clone --recursive https://github.com/vllm-project/vllm.git
-WORKDIR /opt/vllm
-RUN git checkout v0.12.0 && git submodule update --init --recursive
+RUN git clone --depth 1 --recursive --shallow-submodules https://github.com/vllm-project/vllm.git && \
+    cd vllm && \
+    git fetch --depth 1 origin v0.12.0 && \
+    git checkout v0.12.0 && \
+    git submodule update --init --recursive --depth 1
 
-# vLLM build deps
-RUN python3 -m pip install --break-system-packages setuptools_scm cmake ninja packaging
-RUN python3 -m pip install --break-system-packages --no-build-isolation -e .
+WORKDIR /opt/vllm
+# Install vLLM build deps and vLLM in one step, then clean up
+RUN python3 -m pip install --break-system-packages --no-cache-dir setuptools_scm cmake ninja packaging && \
+    python3 -m pip install --break-system-packages --no-cache-dir --no-build-isolation -e . && \
+    rm -rf /opt/vllm/.git /root/.cache/pip && \
+    find /opt/vllm -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/vllm -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
 
 # ---- runtime ----
 EXPOSE 8000
