@@ -10,20 +10,37 @@ Docker image for running **vLLM v0.12.0** on older NVIDIA GPUs with **sm_70** co
 
 Official vLLM Docker images don't support sm_70 GPUs. This project builds PyTorch 2.9.0 and vLLM 0.12.0 from source with `TORCH_CUDA_ARCH_LIST="7.0"` to enable Volta support.
 
+## Pre-built Image
+
+Pull the pre-built image from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/jajmangold/vllm-sm70:latest
+```
+
+Available tags:
+- `ghcr.io/jajmangold/vllm-sm70:latest` - Latest build
+- `ghcr.io/jajmangold/vllm-sm70:0.12.0` - vLLM 0.12.0
+
 ## Quick Start
 
 ```bash
-# Build the image (~3-4 hours, builds PyTorch from source)
-docker build -t vllm-sm70 .
-
-# Run with a model
-docker run --gpus all -p 8000:8000 vllm-sm70 \
+# Pull and run with a model
+docker run --gpus all -p 8000:8000 ghcr.io/jajmangold/vllm-sm70:latest \
   --model Qwen/Qwen3-4B-Instruct \
   --dtype half \
   --trust-remote-code
 
-# Or use docker-compose
+# Or use docker-compose (update image name first)
 docker compose up
+```
+
+### Build from Source (Optional)
+
+If you prefer to build locally (~3-4 hours):
+
+```bash
+docker build -t vllm-sm70 .
 ```
 
 ## Requirements
