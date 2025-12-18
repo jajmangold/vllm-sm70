@@ -1,0 +1,37 @@
+# docker-compose.yml
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vllm-sm70:0.12.0
+    runtime: nvidia
+    ipc: host
+    shm_size: "8gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/root/.cache/huggingface
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:256
+      - CUDA_DEVICE_MAX_CONNECTIONS=1
+    volumes:
+      - ./hf-cache:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+    command:
+      - --host=0.0.0.0
+      - --port=8000
+      - --model=Qwen/Qwen3-4B-Instruct
+      - --dtype=half
+      - --tensor-parallel-size=2
+      - --gpu-memory-utilization=0.86
+      - --max-model-len=8192
+      - --max-num-batched-tokens=8192
+      - --max-num-seqs=64
+      - --swap-space=8
+      - --enforce-eager
+      - --disable-log-requests
+      - --trust-remote-code
