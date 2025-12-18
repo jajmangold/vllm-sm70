@@ -37,10 +37,8 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir numpy wheel "s
 
 # ---- build PyTorch from source (sm_70 enabled) ----
 WORKDIR /opt
-RUN git clone --depth 1 --recursive --shallow-submodules https://github.com/pytorch/pytorch.git && \
+RUN git clone --branch v2.9.0 --depth 1 --recursive --shallow-submodules https://github.com/pytorch/pytorch.git && \
     cd pytorch && \
-    git fetch --depth 1 origin v2.9.0 && \
-    git checkout v2.9.0 && \
     git submodule sync && \
     git submodule update --init --recursive --depth 1
 
@@ -60,10 +58,9 @@ RUN pip install --break-system-packages --no-cache-dir -e . -v --no-build-isolat
 
 # ---- build vLLM v0.12.0 ----
 WORKDIR /opt
-RUN git clone --depth 1 --recursive --shallow-submodules https://github.com/vllm-project/vllm.git && \
+RUN git clone --branch v0.12.0 --depth 1 --recursive --shallow-submodules https://github.com/vllm-project/vllm.git && \
     cd vllm && \
-    git fetch --depth 1 origin v0.12.0 && \
-    git checkout v0.12.0 && \
+    git submodule sync && \
     git submodule update --init --recursive --depth 1
 
 WORKDIR /opt/vllm
