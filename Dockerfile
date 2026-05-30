@@ -1,7 +1,13 @@
 # vLLM with sm_70 (Volta) support
 # Builds vLLM from source so its CUDA kernels include sm_70.
-
-ARG PYTORCH_IMAGE=pytorch/pytorch:2.10.0-cuda12.8-cudnn9-devel
+#
+# IMPORTANT (Volta + torch): recent vLLM (0.20.x) pins torch==2.11.0, and torch
+# 2.11 DROPPED Volta from its cu128/cu130 binaries. Only the **cu126** build of
+# torch 2.11 still ships sm_70. Basing on a cu128/cu130 image therefore produces
+# an image that dies on V100 at CUDA init with "no kernel image is available for
+# execution on the device" (torch's own kernels lack sm_70), even though vLLM's
+# kernels were compiled for 7.0. So we base on the cuda12.6 PyTorch image.
+ARG PYTORCH_IMAGE=pytorch/pytorch:2.11.0-cuda12.6-cudnn9-devel
 FROM ${PYTORCH_IMAGE}
 
 ARG VLLM_VERSION=0.20.2
@@ -52,21 +58,74 @@ RUN python3 use_existing_torch.py && \
 
 RUN pip install --no-cache-dir -c /opt/vllm/constraints.txt bitsandbytes auto-round
 
+# --- Volta runtime patches -------------------------------------------------
+# We deliberately don't build the FlashAttention extensions (no FA on sm_70).
+# But two code paths still import them unconditionally and break model load for
+# anything that pulls in MLA/mamba layers (e.g. Qwen3.5). Patch both to degrade
+# gracefully to the non-FA / native path. (The published images never hit these
+# because they die earlier on the torch/CUDA-arch mismatch fixed by the cu126 base.)
+
+# 1) vllm.vllm_flash_attn hard-raises ImportError when the FA C-extensions are
+#    absent. Don't raise: the symbols stay importable (FA2/FA3_AVAILABLE=False)
+#    and vLLM selects a non-FlashAttention (Triton) backend at runtime.
+RUN python3 - <<'PY'
+import glob
+from pathlib import Path
+p = Path(glob.glob("/usr/local/lib/python3*/dist-packages/vllm/vllm_flash_attn/__init__.py")[0])
+t = p.read_text()
+old = (
+    "if not (FA2_AVAILABLE or FA3_AVAILABLE):\n"
+    "    raise ImportError(\n"
+    '        "vllm.vllm_flash_attn requires the CUDA flash attention extensions "\n'
+    '        "(_vllm_fa2_C or _vllm_fa3_C). On ROCm, use upstream flash_attn."\n'
+    "    )"
+)
+assert old in t, "FA raise block not found"
+t = t.replace(
+    old,
+    "# sm_70 (Volta) build: FA2/FA3 kernels are not built; do not raise.\n"
+    "# vLLM selects a non-FlashAttention (Triton) backend at runtime.\n"
+    "if False:\n"
+    "    raise ImportError('unreachable')",
+)
+p.write_text(t)
+print("patched", p)
+PY
+
+# 2) The rotary-embedding custom op's forward_cuda imports apply_rotary_emb from
+#    vllm.vllm_flash_attn.layers.rotary (part of the FA submodule we don't build).
+#    Fall back to the pure-torch forward_native when that import is missing
+#    (used by Qwen3.5's vision tower; harmless elsewhere on Volta).
+RUN python3 - <<'PY'
+import glob
+from pathlib import Path
+p = Path(glob.glob("/usr/local/lib/python3*/dist-packages/vllm/model_executor/layers/rotary_embedding/common.py")[0])
+t = p.read_text()
+old = "        from vllm.vllm_flash_attn.layers.rotary import apply_rotary_emb\n"
+new = (
+    "        try:\n"
+    "            from vllm.vllm_flash_attn.layers.rotary import apply_rotary_emb\n"
+    "        except ModuleNotFoundError:\n"
+    "            # Volta sm_70 build: FA rotary helper not built; use native path.\n"
+    "            return self.forward_native(x, cos, sin)\n"
+)
+assert old in t, "rotary FA import line not found"
+p.write_text(t.replace(old, new, 1))
+print("patched rotary", p)
+PY
+
 WORKDIR /root
 
+# Build-time sanity check. NOTE: sm_70 and `import vllm._C` CANNOT be validated
+# here -- both need libcuda.so.1, which isn't present during `docker build` (no
+# --gpus / no driver on CI runners). Calling torch.cuda.get_arch_list() without a
+# GPU returns []. So we only assert the Volta-critical invariant: torch is a cu126
+# build (the cu126 wheels are what include sm_70). sm_70 + a real forward pass are
+# validated at container runtime, on the GPU.
 RUN python3 - <<'PY'
 import torch
-import vllm
-import vllm._C
-
 print("torch", torch.__version__, "cuda", torch.version.cuda)
-print("vllm", vllm.__version__)
-
-arches = torch.cuda.get_arch_list()
-print("cuda arch list", arches)
-
-assert torch.__version__.startswith("2.10.0"), torch.__version__
-assert "sm_70" in arches, arches
+assert "cu126" in torch.__version__, torch.__version__
 PY
 
 EXPOSE 8000
